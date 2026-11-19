@@ -1,0 +1,178 @@
+@import "tailwindcss";
+
+/*
+ * DigiVote dark "neon civic" theme.
+ *
+ * The slate / navy / status scales below are intentionally remapped: existing utility classes such as
+ * `text-slate-600` or `text-navy-900` now resolve to light-on-dark values, so every page picks up the theme.
+ * `bg-panel`, `bg-brand` etc. are the dedicated surface tokens (see components/ui.jsx).
+ */
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  /* surfaces */
+  --color-page: #040716;
+  --color-panel: #0a1230;
+  --color-panel-2: rgba(59, 130, 246, 0.1);
+  --color-accent-soft: rgba(59, 130, 246, 0.18);
+  --color-line: #1c2b61;
+  --color-brand: #2563eb;
+  --color-brand-hover: #3b82f6;
+  --color-danger: #dc2626;
+  --color-danger-hover: #ef4444;
+
+  /* neon accents used by tiles, charts and gradients */
+  --color-neon-blue: #3b82f6;
+  --color-neon-cyan: #22d3ee;
+  --color-neon-purple: #8b5cf6;
+  --color-neon-pink: #ec4899;
+  --color-neon-green: #22c55e;
+  --color-neon-orange: #f59e0b;
+
+  /* text and borders (inverted slate) */
+  --color-slate-50: #0f1941;
+  --color-slate-100: #131f4d;
+  --color-slate-200: #1c2b61;
+  --color-slate-300: #2a3c82;
+  --color-slate-400: #6577b3;
+  --color-slate-500: #8e9dcc;
+  --color-slate-600: #a9b6dd;
+  --color-slate-700: #c5cfee;
+  --color-slate-800: #e3e9fb;
+  --color-slate-900: #f4f7ff;
+
+  /* headings and links (formerly dark navy) */
+  --color-navy-950: #030820;
+  --color-navy-900: #f1f5ff;
+  --color-navy-800: #e0e9ff;
+  --color-navy-700: #7fb0ff;
+  --color-navy-600: #4f8dff;
+  --color-navy-100: #c7d5ff;
+  --color-navy-50: #eef3ff;
+
+  /* status colours: translucent surfaces with light text */
+  --color-emerald-50: rgba(16, 185, 129, 0.1);
+  --color-emerald-100: rgba(16, 185, 129, 0.16);
+  --color-emerald-200: rgba(16, 185, 129, 0.35);
+  --color-emerald-700: #34d399;
+  --color-emerald-800: #6ee7b7;
+  --color-emerald-900: #a7f3d0;
+  --color-amber-50: rgba(245, 158, 11, 0.1);
+  --color-amber-100: rgba(245, 158, 11, 0.16);
+  --color-amber-200: rgba(245, 158, 11, 0.35);
+  --color-amber-700: #fbbf24;
+  --color-amber-800: #fcd34d;
+  --color-amber-900: #fde68a;
+  --color-red-50: rgba(239, 68, 68, 0.1);
+  --color-red-100: rgba(239, 68, 68, 0.16);
+  --color-red-200: rgba(239, 68, 68, 0.35);
+  --color-red-700: #f87171;
+  --color-red-800: #fca5a5;
+  --color-red-900: #fecaca;
+  --color-violet-100: rgba(139, 92, 246, 0.2);
+  --color-violet-800: #c4b5fd;
+}
+
+html, body, #root {
+  min-height: 100%;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-page);
+  background-image:
+    radial-gradient(1100px 520px at 85% -8%, rgba(59, 130, 246, 0.14), transparent 60%),
+    radial-gradient(900px 480px at -5% 12%, rgba(139, 92, 246, 0.12), transparent 60%);
+  background-attachment: fixed;
+  @apply text-slate-800 antialiased;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-navy-600);
+  outline-offset: 2px;
+}
+
+/* Gradient text used in hero headlines ("A Stronger Tomorrow."). */
+.text-gradient {
+  background-image: linear-gradient(90deg, #22a6ff 0%, #6b6bff 55%, #a855f7 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.bg-brand-gradient {
+  background-image: linear-gradient(135deg, #1d6bff 0%, #3b5bff 55%, #6d4bff 100%);
+}
+
+/* Glass card with a faint blue edge, matching the dashboard mockups. */
+.glow-card {
+  border: 1px solid rgba(80, 120, 255, 0.22);
+  background-image: linear-gradient(180deg, rgba(20, 34, 86, 0.55), rgba(8, 14, 40, 0.75));
+  box-shadow: 0 0 0 1px rgba(10, 18, 48, 0.6) inset, 0 8px 28px -12px rgba(30, 80, 255, 0.35);
+}
+
+/* Native form controls on dark surfaces. */
+select option {
+  background-color: #0a1230;
+  color: #e3e9fb;
+}
+
+@media print {
+  /* Reports are printed on paper: restore the light palette. */
+  :root {
+    color-scheme: light;
+    --color-page: #ffffff;
+    --color-panel: #ffffff;
+    --color-panel-2: #f3f6fc;
+    --color-accent-soft: #e6ecf8;
+    --color-line: #e2e8f0;
+    --color-slate-50: #f8fafc;
+    --color-slate-100: #f1f5f9;
+    --color-slate-200: #e2e8f0;
+    --color-slate-300: #cbd5e1;
+    --color-slate-400: #94a3b8;
+    --color-slate-500: #64748b;
+    --color-slate-600: #475569;
+    --color-slate-700: #334155;
+    --color-slate-800: #1e293b;
+    --color-slate-900: #0f172a;
+    --color-navy-900: #0b1f4d;
+    --color-navy-800: #12306e;
+    --color-navy-700: #1a3f8c;
+    --color-navy-100: #e6ecf8;
+    --color-emerald-700: #047857;
+    --color-emerald-800: #065f46;
+    --color-emerald-900: #064e3b;
+    --color-amber-700: #b45309;
+    --color-amber-800: #92400e;
+    --color-amber-900: #78350f;
+    --color-red-700: #b91c1c;
+    --color-red-800: #991b1b;
+    --color-red-900: #7f1d1d;
+  }
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+    background-image: none;
+  }
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+  .lg\:pl-64, .lg\:pl-\[4\.5rem\], .lg\:pl-\[17rem\] {
+    padding-left: 0 !important;
+  }
+  .glow-card {
+    box-shadow: none;
+    background-image: none;
+  }
+}

@@ -1,0 +1,30 @@
+# Integration tests run against a real MySQL database (default: digivote_test on the dev instance).
+# The schema is cleaned and re-migrated at context start; never point TEST_DB_URL at real data.
+spring:
+  datasource:
+    url: ${TEST_DB_URL:jdbc:mysql://127.0.0.1:3307/digivote_test}
+  flyway:
+    clean-disabled: false
+digivote:
+  dev-mode: true
+  local-dir: target/it-local
+  signup:
+    organization-slug: it-signup-org
+  crypto:
+    rsa-bits: 2048
+    paillier-bits: 1024
+logging:
+  level:
+    root: WARN
+# Firebase is replaced by a mock gateway in integration tests (see FirebaseAuthIT); the Auth-emulator run
+# (scripts/firebase-auth-e2e.mjs) exercises real token verification.
+---
+digivote:
+  firebase:
+    enabled: false
+    app-check-enabled: false
+# Small shuffled bulletin batches so batching is exercised by the integration tests.
+---
+digivote:
+  anonymity:
+    bulletin-batch-size: 3

@@ -1,0 +1,37 @@
+# Optional containerized DIGI-VOTE stack (MySQL + backend). Not required for local development.
+#   cp .env.example .env   # set DB_PASSWORD, MYSQL_ROOT_PASSWORD, DIGIVOTE_JWT_SECRET, DIGIVOTE_MASTER_KEY
+#   docker compose up --build
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: digivote
+      MYSQL_USER: ${DB_USERNAME:-digivote}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+    command: ["--log-bin-trust-function-creators=1"]
+    volumes:
+      - digivote-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      retries: 20
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/digivote
+      DB_USERNAME: ${DB_USERNAME:-digivote}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DIGIVOTE_JWT_SECRET: ${DIGIVOTE_JWT_SECRET:?set DIGIVOTE_JWT_SECRET in .env}
+      DIGIVOTE_MASTER_KEY: ${DIGIVOTE_MASTER_KEY:?set DIGIVOTE_MASTER_KEY in .env}
+      DIGIVOTE_PUBLIC_BASE_URL: ${DIGIVOTE_PUBLIC_BASE_URL:-http://localhost:8080}
+      DIGIVOTE_CORS_ORIGINS: ${DIGIVOTE_CORS_ORIGINS:-http://localhost:5173}
+    ports:
+      - "8080:8080"
+volumes:
+  digivote-mysql:

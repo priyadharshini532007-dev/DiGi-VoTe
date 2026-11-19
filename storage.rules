@@ -1,0 +1,10 @@
+rules_version = '2';
+// DIGI-VOTE uploads and serves campaign media through its backend (Admin SDK), which enforces
+// organization membership. Browsers never access the bucket directly, so all client access is denied.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

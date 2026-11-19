@@ -1,0 +1,22 @@
+package com.digivote.access;
+
+/** Fine-grained capabilities checked by {@link AccessControlService}. */
+public enum Permission {
+    MANAGE_ORGANIZATION,
+    MANAGE_MEMBERS,
+    ASSIGN_ROLES,
+    CONFIGURE_SECURITY_POLICY,
+    CREATE_ELECTION,
+    MANAGE_ELECTION,
+    ASSIGN_ELECTION_ADMINS,
+    PUBLISH_RESULTS,
+    ARCHIVE_ELECTION,
+    VIEW_ELECTION_INTERNALS,
+    APPLY_AS_CANDIDATE,
+    CAST_VOTE,
+    VIEW_AUDIT_LOGS,
+    VERIFY_INTEGRITY,
+    VIEW_SECURITY_EVENTS,
+    GENERATE_REPORTS,
+    VIEW_REPORTS
+}
