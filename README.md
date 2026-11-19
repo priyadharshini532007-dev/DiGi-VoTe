@@ -66,16 +66,121 @@ sequenceDiagram
     V->>B: anyone checks the receipt: recorded, then counted
 ```
 
-**Why this holds together**
+### The voting process, step by step
 
-- **Anonymity.** Identity tables and ballot tables share no keys. Ballots carry no timestamp and no vote count, ids are
-  random, and the audit log records ballot batches, not ballots, so timing cannot pair a voter with a ballot.
-- **One vote.** One credential per voter (row lock + unique key) and one ballot per credential
-  (`UNIQUE(election_id, token_hash)` under a per-election lock). Concurrent duplicates are tested.
-- **Append-only evidence.** Ballots, ciphertexts, spent tokens, receipts, the audit log and the bulletin board are
-  protected by database triggers.
+The whole process has one rule: **the server learns *that* you may vote, never *what* you voted, and nothing links the
+two.** Here is every step, who does it, and what is (and is not) recorded.
 
----
+#### 0. Before voting opens
+| What happens | Detail |
+| --- | --- |
+| Rules are fixed | Counting method (plurality or approval), maximum selections, NOTA, schedule, receipts, publication policy. Rules lock when voting opens. |
+| Candidates are approved | Applications reviewed with a reason; manifestos are **frozen** the moment voting opens (service check and database trigger). |
+| The voter list is set | Only organization members can be added (suspended or removed members and auditors are refused; "add all" takes every active Voter and Candidate), and the "candidates may vote" and "administrators may vote" rules apply. The list **locks** when voting opens. |
+| Election keys are created | On opening, the server creates a 2048-bit RSA key (to sign credentials) and a Paillier key pair (to encrypt and tally). Private keys are sealed with AES-256-GCM under the server master key. The RSA public key and its **fingerprint** are published. |
+
+#### 1. Eligibility check
+When you open the ballot, the server answers one question with reasons: *may this person vote right now?* It checks that
+you are an active member, on the voter list, allowed by the election's rules, and that the voting window is open.
+
+#### 2. Getting an anonymous credential (the blind signature)
+1. **Key check in your browser.** It fetches the credential-signing key twice, once signed in and once from the public,
+   unauthenticated "anchor", and checks: expected version and protocol, a 2048-bit odd modulus, exponent 65537, a
+   fingerprint it recomputes itself, **identical** keys in both answers, and a **pinned** fingerprint from earlier
+   visits. Any mismatch stops the vote: a server that handed *you* a different key could recognise your ballot later.
+2. **Blinding.** Your browser creates a random 32-byte token `t`, hashes it with a full-domain hash
+   (`MGF1-SHA256`, domain `DIGI-VOTE-FDH-v1`) and multiplies by `rᵉ mod n` for a secret random `r`. The result looks
+   random; `t` and `r` never leave your device.
+3. **Signing.** You send only the blinded value. The server checks eligibility, takes a row lock on your voter record
+   (so concurrent requests cannot issue two credentials), signs the blinded value, and stores only a hash of your
+   request and the blind signature. **One credential per voter.** Repeating the *identical* request returns the same
+   signature, so an interrupted attempt is safe to retry.
+4. **Unblinding.** Your browser divides out `r`, then **verifies** the signature itself before trusting it. The pair
+   (`t`, signature) is a credential that proves "an eligible voter" and nothing else. It is stored only in your browser.
+
+#### 3. Marking the ballot
+The server lists the options in **ballot order** (candidates, plus *None of the above* if enabled). You pick within the
+rules (one for plurality; up to *k* for approval; NOTA excludes everything else) and confirm on a review screen.
+
+#### 4. Casting, anonymously
+Your browser sends `token`, `signature`, your `selections` and a random `submissionNonce` to a **public endpoint that
+refuses any request carrying an `Authorization` header**. The server, in **one transaction** under a per-election lock:
+
+1. verifies the voting window and the credential signature;
+2. computes the **spent-token hash** and rejects a second use of the same token (`DUPLICATE_VOTE`, backed by
+   `UNIQUE(election_id, token_hash)`);
+3. validates your selections against the rules;
+4. **encrypts every option separately** with Paillier: an encryption of **1** if chosen, **0** if not. Selections are
+   never stored in plaintext;
+5. stores the ballot (random id, **no timestamp, no selection count**), one ciphertext row per option, the spent token
+   and a **ballot commitment** (a hash of the ciphertexts);
+6. derives your **receipt code**: `HMAC(receipt key, electionId | spent-token hash)`, 100 bits in Crockford base32 plus
+   a check character, e.g. `XXXXX-XXXXX-XXXXX-XXXXX-C`. Only `SHA-256(code)` is stored;
+7. answers with the receipt (and, in QR mode, a signed QR).
+
+*Retries are safe:* the same token and same nonce return the **same receipt** and write nothing new. A different nonce
+with a spent token is a duplicate. After voting closes, only an exact retry of an already-accepted ballot is answered.
+
+#### 5. Confirmation (QR mode only)
+The ballot is held out of the board and the tally until its **server-signed QR** is submitted within 30 seconds (see
+below). Without QR mode, the ballot is final at step 4.
+
+#### 6. Publication: the shuffled, hash-chained board
+Accepted ballots wait until a batch is large enough (default **10**), then are appended in a **uniformly random order**
+(cryptographic Fisher-Yates), so board position says nothing about voting order. Each entry is
+`SHA-256("DIGI-VOTE-BB-v1" | election | seq | commitment | previousHash)`, chained from a per-election genesis hash.
+Entries are timestamped only to the **minute**, and the final partial batch is published when voting closes. The board
+is append-only (database triggers) and anyone can recompute the chain.
+
+#### 7. Closing voting
+Voting closes at the end of the window or on an admin transition. The close is **serialized with ballot acceptance**:
+every ballot accepted before the close is on the board afterwards, and a ballot that lost the race is cleanly rejected
+(`CREDENTIAL_EXPIRED`). This is tested with concurrent ballots racing the close.
+
+#### 8. Counting
+1. The server verifies the board chain and that spent tokens equal ballots.
+2. For each option it **multiplies all of that option's ciphertexts**; Paillier turns the product into an encryption of
+   the **sum**. Only these totals are decrypted. **Individual ballots are never decrypted.**
+3. A counting strategy ranks the options: *plurality* (most votes wins) or *approval* (up to *k* approvals per ballot).
+   Ties are **detected and flagged** (no automatic winner); NOTA can lead without winning.
+4. The result is bound to the ballots it counted by
+   `resultHash = SHA-256(election | method | ballotCount | boardHead | option:votes,…)`.
+5. An auditor can **recompute** every commitment and aggregate; your browser recomputes the result hash.
+
+#### 9. Publishing and verifying
+Results are published by policy (manual or automatic) and frozen by a trigger. Anyone with a receipt can verify without
+signing in:
+
+| Outcome | Meaning |
+| --- | --- |
+| `RECEIPT_RECOGNIZED` | accepted; waiting for its shuffled batch (or its QR) |
+| `BALLOT_RECORDED` | your commitment is on the board and the chain verifies |
+| `INCLUDED_IN_TALLY` | results were computed over a board head that contains it |
+| `NOT_CONFIRMED` | QR mode: never confirmed, so not counted |
+| `INVALID_RECEIPT` / `RECEIPT_NOT_FOUND` | typo (the check character catches it) / never issued |
+
+### What each party can and cannot know
+
+| | Knows | Cannot know |
+| --- | --- | --- |
+| **Server, at credential time** | you are eligible; a blinded value | the token you will vote with |
+| **Server, at ballot time** | a valid token, your selections (**in memory, during encryption**) | who you are |
+| **Database** | encrypted ballots, spent-token hashes, receipt-code hashes | any link from a ballot to a voter; ballot times; plaintext choices |
+| **Auditor** | chains, aggregates, counts | how anyone voted |
+| **You** | your receipt, and that your ballot is on the board | other people's choices |
+
+### Voting edge cases
+
+| Situation | What happens |
+| --- | --- |
+| Vote twice | second ballot refused (`DUPLICATE_VOTE`); one credential per voter |
+| Retry after a lost response | same receipt returned, nothing duplicated |
+| Close of voting races your ballot | accepted before close and published, or cleanly refused after |
+| Browser data lost after credential issued | a second credential is refused; use the original browser |
+| QR not confirmed in 30 s (QR mode) | ballot voided, fresh credential, vote again |
+| Server swaps your signing key | key transparency check stops the vote |
+| Tampered receipt or QR | `INVALID` |
+| Admin edits a record | audit chain and board chain break; triggers block direct edits |
 
 ## The signed QR receipt
 
