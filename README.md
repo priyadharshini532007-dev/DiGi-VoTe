@@ -1,99 +1,230 @@
-# DigiVote
+<div align="center">
 
-**Universal secure election management platform** · OOPS + DBMS Capstone Project
+# 🗳️ DigiVote
 
-> Every eligible voter can cast one vote, every accepted ballot can be independently checked, and the election process leaves a verifiable audit trail.
+### Every vote secret. Every result provable.
 
-DigiVote lets organizations (universities, companies, housing societies, NGOs, clubs) run complete elections: onboarding, configurable rules, candidate applications and manifestos, eligible voter lists, anonymous voting with blind-signed credentials, Paillier-encrypted tallying, verification receipts with QR codes, a public hash-chained bulletin board, tamper-evident audit logs, reports and an Election Trust Dashboard.
+**A verifiable, anonymous election platform for universities, companies, housing societies, NGOs and clubs.**
 
-| | |
-|---|---|
-| Backend | Java 21, Spring Boot 3.5, Spring Security, Spring Data JPA/Hibernate, Bean Validation, Flyway, springdoc-openapi, Bouncy Castle |
-| Database | MySQL 8+ (tested on 9.7): 28 tables, 2 views, 1 stored procedure, 16 triggers |
-| Frontend | React 19, Vite, Tailwind CSS 4, React Router, Axios, Chart.js |
-| Cloud (optional) | Firebase Authentication, Cloud Storage, Cloud Messaging, App Check, Analytics, Hosting |
-| Tests | JUnit 5, Mockito, Spring Boot Test (MockMvc on real MySQL), Vitest, Testing Library |
+`Blind signatures` · `Homomorphic tally` · `Signed QR receipts` · `Hash-chained public bulletin board` · `Tamper-evident audit log`
 
-## Quick start (local)
+![Java](https://img.shields.io/badge/Java-21-orange) ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5-6db33f) ![MySQL](https://img.shields.io/badge/MySQL-8.4-4479a1) ![Tests](https://img.shields.io/badge/tests-136%20passing-brightgreen) ![Migrations](https://img.shields.io/badge/Flyway-14%20migrations-blue)
 
-Requires Java 21, Maven, Node 20+, and MySQL server binaries. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for details and troubleshooting.
+</div>
 
-```bash
-scripts/dev-mysql.sh start          # private MySQL on 127.0.0.1:3307, writes DB settings to .env
+---
+
+## The idea
+
+Most online voting asks you to trust somebody: the host, the admin, the database. DigiVote is built on the opposite
+principle: **the system should not need your trust, because it can show its work.**
+
+- Your ballot is **anonymous by construction**, not by promise: your browser gets a *blind-signed* credential, so the
+  server proves you are eligible without ever seeing the token you vote with.
+- Your vote is **encrypted** and tallied **homomorphically**: totals are decrypted, individual ballots never are.
+- Your **receipt** lets you check, without logging in, that your ballot is on a public, hash-chained bulletin board and
+  was counted in the result.
+- Every administrative action lands in a **tamper-evident audit chain** that anyone with access can recompute from the
+  first record, and so can the browser.
+
+> *One eligible voter, one vote. Every accepted ballot independently checkable. Every action on the record.*
+
+---
+
+## What it does
+
+| Stage | Capability |
+| --- | --- |
+| **Onboard** | Register an organization (typed: university, company, housing society, NGO, club). Invite members by one-time code, or let people **self sign-up** with encrypted identity details. Everyone gets a unique **DV number** (`DV-2026-00001`) to sign in with. |
+| **Configure** | Per-election rules (plurality or approval counting, NOTA, selections, schedule, receipts, publication policy), validated by one rule engine. Optional **election banner**. |
+| **Nominate** | Candidate applications, reviewer decisions with reasons, profiles (education, experience), manifestos with initiatives that **freeze when voting opens**, photos, PDFs, video. |
+| **Vote** | Blind-signed anonymous credential → encrypted ballot sent **without a login token** → receipt. Optionally confirmed by a **signed QR within 30 seconds**. |
+| **Verify** | Receipt code or QR → public bulletin board → "recorded" → "included in the tally". |
+| **Count** | Paillier homomorphic tally, results hash recomputable in the browser, aggregation check by an auditor. |
+| **Audit** | Hash-chained audit log, security events, integrity dashboard, **Election Trust Dashboard** with live checks. |
+| **Govern** | Per-organization security policy (lockout, session length, mixed-case passwords), admin-initiated password recovery. |
+
+---
+
+## How a vote travels
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant V as Voter's browser
+    participant S as DigiVote server
+    participant B as Public bulletin board
+    V->>V: create random token, blind it (secret factor stays here)
+    V->>S: signed in: "sign this blinded value" (eligibility checked)
+    S-->>V: blind signature (server never sees the token)
+    V->>V: unblind: token + signature = anonymous credential
+    V->>S: ballot + credential, NO login token
+    S->>S: verify signature, spend token once, encrypt each option (Paillier)
+    S-->>V: receipt code + server-signed QR
+    V->>S: (optional) submit QR within 30 s to confirm
+    S->>B: confirmed ballots published in shuffled, hash-chained batches
+    V->>B: anyone checks the receipt: recorded, then counted
 ```
 
-```bash
-cd backend && mvn spring-boot:run   # API + HTML prototype (web/) on http://localhost:8080
+**Why this holds together**
+
+- **Anonymity.** Identity tables and ballot tables share no keys. Ballots carry no timestamp and no vote count, ids are
+  random, and the audit log records ballot batches, not ballots, so timing cannot pair a voter with a ballot.
+- **One vote.** One credential per voter (row lock + unique key) and one ballot per credential
+  (`UNIQUE(election_id, token_hash)` under a per-election lock). Concurrent duplicates are tested.
+- **Append-only evidence.** Ballots, ciphertexts, spent tokens, receipts, the audit log and the bulletin board are
+  protected by database triggers.
+
+---
+
+## The signed QR receipt
+
+A receipt that proves something, with nothing stored about *when* or *who*.
+
+```
+DIGIVOTE | QR1 | receipt code | election | issued-at | ballot commitment | HMAC signature
 ```
 
-The prototype in `web/` is served by the backend from the same origin (no CORS, edit and refresh). The legacy React app is optional:
+- **Stateless 30-second window.** The server checks its own signature and the time inside the QR. It stores no issue
+  time, so confirming adds no timing signal.
+- **Anonymous confirmation.** The submit endpoint refuses any request that carries a login token.
+- **Unconfirmed means uncounted.** A pending ballot is kept out of the bulletin board, the tally and the aggregates by
+  a marker row that holds neither time nor voter. Append-only tables are never touched.
+- **Recast safely.** If the window passes, the voter proves the old credential and receives a fresh one; the old
+  ballot is voided and can never be confirmed. A confirmed ballot can never be replaced.
+- **Tamper-evident.** A changed code, election or signature is reported `INVALID`; a repeat is `DUPLICATE`; late is `EXPIRED`.
 
-```bash
-cd frontend-react && npm install && npm run dev   # legacy app on http://localhost:5173
+Off by default (`DIGIVOTE_QR_CONFIRMATION=true` turns it on). With it off, ballots are final when accepted.
+
+---
+
+## One origin, two modes
+
+The frontend is a single-file prototype ([`web/index.html`](web/index.html)) that runs **standalone** from the browser
+(demo mode) or, with one query parameter, against the real backend.
+
+```
+http://localhost:8080/            demo mode   no network, sample data, instant
+http://localhost:8080/?mode=live  live mode   every screen backed by the Spring Boot API
 ```
 
-Then open http://localhost:8080 and **Register organization**, or create a ready-to-vote demo dataset:
+| File | Role |
+| --- | --- |
+| `web/index.html` | the UI, unchanged apart from a few one-line seams |
+| `web/api.js` | mode switch, JWT in `sessionStorage`, fetch with timeouts, error and field-error mapping |
+| `web/live.js` | one clearly marked block per feature: elections, candidates, members, voting, audit, results, public site |
+| `web/crypto.js` | voter-side blind signatures and key-transparency checks (matches the Java test vectors) |
+
+**The browser does the cryptography that must stay private; the server does the rest.** The blinding has to happen on
+the voter's device, otherwise the server could link voter and ballot. Signing, encryption, tallying, receipts and audit
+hashing stay on the backend. The browser also **re-verifies** the evidence it is shown: it recomputes the audit chain,
+every bulletin-board chain and the result hash with the backend's published formats.
+
+---
+
+## Trust you can check
+
+| Check | Server | Your browser |
+| --- | :---: | :---: |
+| Audit chain from genesis | ✅ | ✅ recomputed |
+| Bulletin board hash chain | ✅ | ✅ recomputed |
+| Result hash | ✅ | ✅ recomputed |
+| Credential key is the election's published key | | ✅ fingerprint + pinned |
+| Ballot aggregates (re-multiplied ciphertexts) | ✅ | shows the result |
+
+The **Election Trust Dashboard** shows six live checks (ballot accounting, duplicate prevention, bulletin chain,
+receipts, result consistency, audit chain) with no invented "trust score": any failure is a failure.
+
+---
+
+## Quick start
+
+Requires Java 21, Maven 3.9+ and MySQL 8 server binaries.
 
 ```bash
-node scripts/e2e-workflow.mjs --prepare-demo
+scripts/dev-mysql.sh start            # private MySQL on 127.0.0.1:3307 (Git Bash / Linux / macOS)
+cd backend && mvn spring-boot:run     # API + web app on http://localhost:8080
 ```
 
-It prints the generated accounts (owner, administrator, three candidates, two voters, auditor) and their random passwords.
+Open **http://localhost:8080/?mode=live**, choose *Register organization*, and you are an owner with a DV number.
+On Windows the script's socket check does not work; start `mysqld` directly (see
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
 
-For fixed demo logins per role (`owner@digivote.test`, `admin@`, `candidate@`, `voter@`, `auditor@`) on an isolated emulator-based demo stack, run `scripts/demo-setup.sh` and see [docs/DEMO_ACCOUNTS.md](docs/DEMO_ACCOUNTS.md). Without `--prepare-demo` it runs the entire 27-step demonstration through the API and checks every step.
+Useful URLs: Swagger UI `/swagger-ui.html` · health `/actuator/health` · OpenAPI `/v3/api-docs`
 
-* Swagger UI: http://localhost:8080/swagger-ui.html (OpenAPI: `/v3/api-docs`, importable into Postman)
-* Health: http://localhost:8080/actuator/health
+| Setting | Purpose | Default |
+| --- | --- | --- |
+| `DIGIVOTE_PUBLIC_BASE_URL` | links in invitations and receipt QRs | `http://localhost:8080` |
+| `DIGIVOTE_SIGNUP_ORG_SLUG` | organization the Sign up page joins people to (empty = disabled) | empty |
+| `DIGIVOTE_QR_CONFIRMATION` | require signed-QR confirmation within 30 s | `false` |
+| `DIGIVOTE_WEB_DIR` | folder served as the frontend | `../web` |
 
-## Tests
+Configuration lives in a git-ignored `.env`; start from [`.env.example`](.env.example).
+
+---
+
+## Quality
 
 ```bash
-cd backend && mvn test           # 61 unit + 25 MySQL integration tests
-cd frontend-react && npm test          # 20 tests
-node scripts/e2e-workflow.mjs    # 34-step end-to-end API run (backend must be running)
-scripts/check-secrets.sh         # verifies no secrets are tracked
+cd backend && mvn test        # 136 tests: 68 unit + 68 integration on real MySQL
+scripts/check-secrets.sh      # confirms no secrets are tracked
 ```
 
-Integration tests use the `digivote_test` database (cleaned and re-migrated on each run) and skip themselves if it is unreachable. Results: [docs/TEST_REPORT.md](docs/TEST_REPORT.md).
+- **136 tests, 0 failures** on MySQL 8.4, including concurrency (duplicate ballots racing the close of voting), an
+  anonymity attack simulation, database-trigger checks, and cross-language crypto vectors.
+- **14 Flyway migrations** build the schema from nothing. Integration tests clean and re-migrate a dedicated test
+  database every run.
+- Browser-side checks for the live screens ran against a stand-in server; the
+  [verification guide](docs/VERIFICATION_GUIDE.md) walks every flow against the real stack.
 
-## How the important parts work
+---
 
-* **Anonymous voting**: the voter's browser blinds a random token; the server signs it after checking eligibility without seeing it (RSA blind signature); the ballot is submitted with the unblinded token and **no login token**. Identity tables and ballot tables share no columns or keys.
-* **One vote**: one credential per eligible voter (row lock + unique key) and one ballot per credential (serialized transaction + `UNIQUE(election_id, token_hash)`); concurrent duplicates are tested.
-* **Encrypted tally**: each ballot option is a Paillier ciphertext; results multiply ciphertexts and decrypt only the totals.
-* **Verification**: receipt code + QR → bulletin board entry → "ballot recorded", then "included in tally" once results are computed over a bulletin head that contains it.
-* **Audit**: every significant action is appended to a per-organization SHA-256 hash chain protected by triggers; auditors recompute it from genesis.
-* **Rules and lifecycle**: per-election persisted rules interpreted by one rule engine; Draft → Registration → Campaign → Voting → Verification → Published → Archived enforced by a state machine.
+## Honest limits
 
-Read the guarantees **and limitations** in [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md).
+Strong claims need honest edges, so these are stated plainly (full model in [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md)):
+
+- The server holds the tally key and decrypts the **totals**. There is no zero-knowledge proof of correct decryption;
+  auditors verify the aggregation, not the decryption.
+- The server briefly sees each selection in memory when it encrypts the ballot (never linked to an identity, never
+  stored in plaintext).
+- A voter who loses their credential before voting cannot get a second one (that would allow voting twice).
+- Signed-QR confirmation cannot confirm a ballot cast in the last 30 seconds before voting closes.
+- There is no email delivery: invitation and recovery codes are passed on by the person who creates them.
+
+---
 
 ## Repository layout
 
 ```
-backend/                 Spring Boot API (com.digivote.*), Flyway migrations, tests
-frontend-react/         React app (pages per role, crypto/blindRsa.js, tests)
-web/                    HTML prototype (index.html, images/, oops/) - the real frontend, served by Spring Boot
-scripts/dev-mysql.sh     private development MySQL (start|stop|status)
-scripts/e2e-workflow.mjs end-to-end demonstration through the API
-scripts/check-secrets.sh secret scan of tracked files
-docs/                    architecture, database, security, API, tests, deployment, viva
-docker-compose.yml       optional MySQL + backend stack
-firebase.json            Firebase Hosting for frontend-react/dist
-.env.example             configuration placeholders (copy to .env, never commit .env)
+backend/            Spring Boot API (com.digivote.*), Flyway migrations V1-V14, tests
+web/                the HTML prototype + api.js / live.js / crypto.js, served by Spring Boot
+frontend-react/     the earlier React app, kept for reference
+scripts/            dev MySQL, end-to-end API run, secret scan, demo setup
+docs/               architecture, database, security, API, tests, deployment, viva, verification guide
+docker-compose.yml  optional MySQL + backend stack (build from the repo root)
+.env.example        configuration placeholders (copy to .env, never commit .env)
 ```
 
 ## Documentation
 
 | Document | Contents |
-|---|---|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers, packages, OOPS pillars, design patterns with file paths, class/state/sequence/auth diagrams |
-| [DATABASE_DESIGN.md](docs/DATABASE_DESIGN.md) | ER diagram, tables, normalization, views, procedure, triggers, transactions |
-| [SECURITY_MODEL.md](docs/SECURITY_MODEL.md) | Threat model, authentication, authorization, anonymity, cryptography, keys, limitations |
-| [API_DOCUMENTATION.md](docs/API_DOCUMENTATION.md) | Endpoint reference and conventions |
-| [TEST_REPORT.md](docs/TEST_REPORT.md) | What was run and the results, edge-case mapping |
-| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Setup, environment variables, Firebase, hosting, troubleshooting |
-| [IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) | Completed, partial and not-implemented items |
-| [PROJECT_AUDIT.md](docs/PROJECT_AUDIT.md) | Initial workspace inspection and requirement traceability |
-| [VIVA_PREPARATION.md](docs/VIVA_PREPARATION.md) | 27-step demo script and question bank |
-| [COMPLETION_REPORT.md](docs/COMPLETION_REPORT.md) | Completion report as of 2026-10-10 (dated snapshot; current state in IMPLEMENTATION_STATUS.md) |
-| [DEMO_ACCOUNTS.md](docs/DEMO_ACCOUNTS.md) | Five emulator demo accounts (one per role): setup, login and checks |
+| --- | --- |
+| [VERIFICATION_GUIDE.md](docs/VERIFICATION_GUIDE.md) | how to verify the prototype-to-backend wiring, flow by flow |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | layers, packages, OOPS pillars, design patterns, diagrams |
+| [DATABASE_DESIGN.md](docs/DATABASE_DESIGN.md) | ER diagram, tables, normalization, views, procedure, triggers |
+| [SECURITY_MODEL.md](docs/SECURITY_MODEL.md) | threat model, anonymity, cryptography, keys, limitations |
+| [API_DOCUMENTATION.md](docs/API_DOCUMENTATION.md) | endpoint reference and conventions |
+| [TEST_REPORT.md](docs/TEST_REPORT.md) | earlier test report and edge-case mapping |
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | setup, environment variables, Firebase, hosting |
+| [IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) | completed, partial and not-implemented items |
+| [VIVA_PREPARATION.md](docs/VIVA_PREPARATION.md) | demo script and question bank |
+
+---
+
+<div align="center">
+
+**DigiVote**: elections you can check instead of elections you have to believe.
+
+*OOPS + DBMS Capstone Project*
+
+</div>
