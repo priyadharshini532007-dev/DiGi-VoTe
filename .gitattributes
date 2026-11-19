@@ -1,7 +1,11 @@
-# Language statistics (GitHub "Linguist") only; these rules do not change how the code builds or runs.
+# GitHub language statistics only; does not affect building or running.
 
-# The earlier React client is kept for reference; the maintained frontend is web/.
-frontend-react/** linguist-vendored=true linguist-documentation=true linguist-detectable=false
+# Earlier React client, kept for reference (the maintained frontend is web/).
+/frontend-react/** linguist-vendored
+/frontend-react/**/*.js linguist-vendored
+/frontend-react/**/*.jsx linguist-vendored
+/frontend-react/**/*.css linguist-vendored
+/frontend-react/**/*.html linguist-vendored
 
-# Generated search index for the code explorer (not hand-written source).
-web/oops/data/** linguist-generated=true
+# Generated search index for the code explorer.
+/web/oops/data/** linguist-generated
