@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🗳️ DigiVote
+# DigiVote
 
 ### Every vote secret. Every result provable.
 
@@ -30,6 +30,80 @@ principle: **the system should not need your trust, because it can show its work
 > *One eligible voter, one vote. Every accepted ballot independently checkable. Every action on the record.*
 
 ---
+
+## Technology stack
+
+| Layer | Technology | Used for |
+| --- | --- | --- |
+| **Runtime** | Java 21 (LTS) | records for immutable DTOs and value objects, enum-driven state machine, modern `switch` and pattern matching |
+| **Application framework** | Spring Boot 3.5 · Spring MVC · Spring Validation | REST API, DTO records, Bean Validation, central `@RestControllerAdvice` error mapping |
+| **Security** | Spring Security · OAuth2 Resource Server (Nimbus JOSE) · BCrypt (cost 12) | stateless HS256 JWT sessions, method-free authorization through one `AccessControlService`, per-organization lockout and password policy |
+| **Persistence** | Spring Data JPA / Hibernate · HikariCP · MySQL 8.4 (InnoDB) | aggregates and repositories, row locks (`SELECT … FOR UPDATE`) as serialization points |
+| **Schema management** | Flyway (14 versioned migrations) | schema, views, stored procedure, **append-only triggers**, reference data, anonymity hardening |
+| **Cryptography** | Bouncy Castle · JCA (AES-256-GCM, HMAC-SHA256, SHA-256, SecureRandom) | RSA-FDH blind signatures, Paillier homomorphic encryption, key sealing, receipt and QR signing, hash chains |
+| **API documentation** | springdoc-openapi (OpenAPI 3) | generated, importable API contract |
+| **Optional cloud** | Firebase Admin SDK (Auth, Storage, Cloud Messaging, App Check) | federated sign-in and object storage; local-disk storage is the default |
+| **Frontend** | Dependency-free ES2023 single-page app (hash router, no build step) | all role dashboards, served by the backend as static content |
+| **Browser crypto** | `BigInt` modular arithmetic · Web Crypto (`SubtleCrypto`) | blinding and unblinding, SHA-256 chain verification, key-transparency checks |
+| **Browser bridge** | `fetch` · `AbortController` · `sessionStorage` / `localStorage` | JWT handling, typed errors, per-feature hydrators, demo/live mode switch |
+| **Build and delivery** | Maven · multi-stage Docker image · Docker Compose | single deployable jar that embeds the web app |
+| **Testing** | JUnit 5 · Mockito · AssertJ · Spring Boot Test + MockMvc on real MySQL | unit, concurrency, anonymity-attack and database-trigger tests |
+| **Legacy client** | React 19 · Vite · Tailwind CSS 4 | the earlier frontend, kept for reference and as the source of the browser crypto modules |
+
+### Cryptographic building blocks
+
+| Purpose | Primitive | Parameters |
+| --- | --- | --- |
+| Anonymous eligibility credential | RSA blind signature (Chaum) with a full-domain hash | 2048-bit modulus, e = 65537, FDH = MGF1-SHA256 over domain `DIGI-VOTE-FDH-v1` |
+| Ballot secrecy and tally | Paillier additively homomorphic encryption | one ciphertext per option (encrypts 0 or 1); totals decrypted, ballots never |
+| Key custody | AES-256-GCM key wrapping | purpose-bound AAD per key; master key from the environment |
+| Receipt codes | HMAC-SHA256 → Crockford base32 | 100 bits + check character; only `SHA-256(code)` stored |
+| QR confirmation | HMAC-SHA256 (derived subkey) | stateless 30 s window, no token or voter in the payload |
+| Audit log | SHA-256 hash chain, canonical format v1 | per-organization chain, records and head protected by triggers |
+| Bulletin board | SHA-256 hash chain | per-election genesis, shuffled batches (Fisher-Yates over `SecureRandom`) |
+| Result binding | SHA-256 over election, method, ballot count, board head, per-option totals | recomputable by auditors and in the browser |
+| Identity data at rest | AES-256-GCM seal + keyed HMAC for uniqueness | ID numbers sealed; proof scans encrypted before storage |
+| Passwords | BCrypt | cost 12 |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Browser
+        UI[Single-page UI]
+        BR[api.js / live.js bridge]
+        CR[crypto.js: blind RSA, SHA-256 chain checks]
+        UI --- BR --- CR
+    end
+    subgraph Server["Spring Boot (single jar)"]
+        SEC[Security filter chain: JWT, CSP, CORS]
+        API[REST controllers + DTO validation]
+        DOM[Domain services: elections, rules, candidates, voting, results, audit]
+        CRY[Crypto services: RSA-FDH, Paillier, KeyVault]
+        STO[Media storage: local or Firebase]
+        SEC --> API --> DOM --> CRY
+        DOM --> STO
+    end
+    DB[(MySQL 8.4: InnoDB, Flyway, triggers)]
+    BR -- "JSON over HTTPS; ballots carry no Authorization header" --> SEC
+    DOM --> DB
+```
+
+**Design choices that carry weight**
+
+- **Modular monolith** with one transactional boundary per use case; the ballot path is a single `READ_COMMITTED`
+  transaction serialized per election by a row lock on the election-keys record.
+- **Polymorphic roles.** Five role classes (`OrganizationOwnerUser`, `ElectionAdministratorUser`, `CandidateUser`,
+  `VoterUser`, `AuditorUser`) expose permissions; roles are resolved from memberships on **every request**, so
+  suspensions and role changes apply immediately and tokens carry no roles.
+- **State machine** for the election lifecycle (Draft → Registration → Campaign → Voting → Verification → Published →
+  Archived) with preconditions evaluated by a readiness service; the server is the only authority.
+- **Strategy pattern** for counting (plurality, approval) and storage (local disk, Firebase), **decorator** for upload
+  validation (declared type *and* magic bytes), **observer** for lifecycle events (manifesto freeze, notifications).
+- **Defence in depth for evidence.** Triggers make ballots, ciphertexts, spent tokens, receipts, audit records and the
+  bulletin board immutable even against a compromised application account.
+- **Content-Security-Policy and same-origin delivery.** The web app and API share an origin, so no CORS surface exists
+  for the primary client.
 
 ## What it does
 
@@ -205,13 +279,15 @@ Off by default (`DIGIVOTE_QR_CONFIRMATION=true` turns it on). With it off, ballo
 
 ## One origin, two modes
 
-The frontend is a single-file prototype ([`web/index.html`](web/index.html)) that runs **standalone** from the browser
-(demo mode) or, with one query parameter, against the real backend.
+The frontend is a single-file prototype ([`web/index.html`](web/index.html)) that runs **standalone** in the browser
+(demo mode, state in `localStorage`) or, selected by one query parameter, against the real backend:
 
-```
-http://localhost:8080/            demo mode   no network, sample data, instant
-http://localhost:8080/?mode=live  live mode   every screen backed by the Spring Boot API
-```
+| Parameter | Mode | Data source |
+| --- | --- | --- |
+| *(none)* or `?mode=demo` | demo | in-browser simulation, no network |
+| `?mode=live` | live | every screen hydrated from the Spring Boot API |
+
+The choice is remembered per browser; opening the file directly is always demo mode.
 
 | File | Role |
 | --- | --- |
@@ -242,31 +318,30 @@ receipts, result consistency, audit chain) with no invented "trust score": any f
 
 ---
 
-## Quick start
+## Build and run
 
-Requires Java 21, Maven 3.9+ and MySQL 8 server binaries.
+Requirements: JDK 21, Maven 3.9+, MySQL 8.x.
 
 ```bash
-scripts/dev-mysql.sh start            # private MySQL on 127.0.0.1:3307 (Git Bash / Linux / macOS)
-cd backend && mvn spring-boot:run     # API + web app on http://localhost:8080
+scripts/dev-mysql.sh start        # isolated development database (or point DB_URL at your own MySQL 8)
+cd backend && mvn spring-boot:run # applies Flyway migrations on start; serves API and web app
+cd backend && mvn package         # single executable jar with the web app embedded
+docker compose up --build         # optional containerised MySQL + backend
 ```
 
-Open **http://localhost:8080/?mode=live**, choose *Register organization*, and you are an owner with a DV number.
-On Windows the script's socket check does not work; start `mysqld` directly (see
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
+The API contract is generated at `/v3/api-docs` (Swagger UI at `/swagger-ui.html`); operational health is exposed at
+`/actuator/health`. Configuration comes from environment variables or a git-ignored `.env`
+(template: [`.env.example`](.env.example); full reference in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
 
-Useful URLs: Swagger UI `/swagger-ui.html` · health `/actuator/health` · OpenAPI `/v3/api-docs`
-
-| Setting | Purpose | Default |
-| --- | --- | --- |
-| `DIGIVOTE_PUBLIC_BASE_URL` | links in invitations and receipt QRs | `http://localhost:8080` |
-| `DIGIVOTE_SIGNUP_ORG_SLUG` | organization the Sign up page joins people to (empty = disabled) | empty |
-| `DIGIVOTE_QR_CONFIRMATION` | require signed-QR confirmation within 30 s | `false` |
-| `DIGIVOTE_WEB_DIR` | folder served as the frontend | `../web` |
-
-Configuration lives in a git-ignored `.env`; start from [`.env.example`](.env.example).
-
----
+| Variable | Effect |
+| --- | --- |
+| `DIGIVOTE_JWT_SECRET`, `DIGIVOTE_MASTER_KEY` | session signing key; 32-byte master key for key sealing (generated in dev mode only) |
+| `DIGIVOTE_PUBLIC_BASE_URL` | origin embedded in invitation links and receipt QR codes |
+| `DIGIVOTE_SIGNUP_ORG_SLUG` | organization that self sign-up joins people to (empty disables sign-up) |
+| `DIGIVOTE_QR_CONFIRMATION` | require signed-QR confirmation within 30 s |
+| `DIGIVOTE_BULLETIN_BATCH_SIZE` | minimum ballots per shuffled bulletin batch |
+| `DIGIVOTE_STORAGE_PROVIDER` | `local` or `firebase` media storage |
+| `DIGIVOTE_RSA_BITS`, `DIGIVOTE_PAILLIER_BITS` | key sizes (production defaults 2048) |
 
 ## Quality
 
